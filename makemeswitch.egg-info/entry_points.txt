@@ -1,0 +1,2 @@
+[console_scripts]
+makemeswitch = makemeswitch.main:main

@@ -1,0 +1,25 @@
+[Unit]
+Description=MakeMeSwitch CLI and web management panel
+After=openvswitch-switch.service network-online.target
+Wants=openvswitch-switch.service network-online.target
+
+[Service]
+Type=simple
+Environment=MMS_CONFIG=/etc/makemeswitch/makemeswitch.yaml
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/makemeswitch/venv/bin/python -m makemeswitch.main serve
+WorkingDirectory=/opt/makemeswitch/app
+Restart=on-failure
+RestartSec=3
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/makemeswitch /var/log/makemeswitch /run/openvswitch
+RuntimeDirectory=makemeswitch
+
+[Install]
+WantedBy=multi-user.target

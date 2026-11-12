@@ -1,0 +1,704 @@
+Metadata-Version: 2.4
+Name: makemeswitch
+Version: 1.0.0
+Summary: Turn a Linux PC into a managed Ethernet switch with a Cisco-inspired CLI and web panel
+Author: MakeMeSwitch CLI contributors
+License: Apache-2.0
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn[standard]>=0.27
+Requires-Dist: prompt_toolkit>=3.0.43
+Requires-Dist: rich>=13.7
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: argon2-cffi>=23.1
+Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: itsdangerous>=2.1
+Requires-Dist: asyncssh>=2.14
+Requires-Dist: cryptography>=41
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: httpx>=0.27; extra == "dev"
+Requires-Dist: websockets>=12.0; extra == "dev"
+Dynamic: license-file
+
+# MakeMeSwitch CLI
+
+Turn a plain Debian/Ubuntu server with a few Ethernet ports into a managed
+Layer-2 switch with a Cisco-inspired CLI and a web dashboard.
+
+MakeMeSwitch is **not** a simulator: every `switchport`, `vlan`, `mtu`,
+`shutdown` or `ip routing` command is reconciled into real
+[Open vSwitch](https://www.openvswitch.org/) state on the running host, and the
+tests prove forwarding with real packets in Linux network namespaces.
+
+```
+Switch> enable
+Switch# configure terminal
+Switch(config)# hostname LAB-SW01
+LAB-SW01(config)# vlan 10
+LAB-SW01(config-vlan)# name SERVERS
+LAB-SW01(config-vlan)# exit
+LAB-SW01(config)# interface ethernet 1/1
+LAB-SW01(config-if)# description core uplink
+LAB-SW01(config-if)# switchport mode access
+LAB-SW01(config-if)# switchport access vlan 10
+LAB-SW01(config-if)# no shutdown
+LAB-SW01(config-if)# end
+LAB-SW01# write memory
+```
+
+- CLI: `sudo makemeswitch`
+- Web panel: `http://<switch-ip>:8000/` (binds all interfaces by default; use
+  `--https` + `--port 8443` for TLS)
+
+---
+
+## 1. What actually works
+
+| Area | Status |
+|---|---|
+| L2 switching in OVS (access, trunk, native VLAN, allowed lists) | ✅ implemented |
+| VLAN isolation, MAC learning, broadcast/unknown-unicast flooding | ✅ implemented |
+| RSTP (per-port edge on access ports), priority | ✅ implemented |
+| LACP / static bonds, port-channel config | ✅ implemented |
+| SPAN / port mirroring | ✅ implemented |
+| MTU per port | ✅ implemented |
+| Physical port discovery + stable identity mapping (PCI/USB topology) | ✅ implemented |
+| Hotplug / link up-down / speed / duplex / counters | ✅ implemented |
+| Running + startup config, `write memory`, `copy run start`, rollback | ✅ implemented |
+| Validation, idempotent reconciliation, drift detection, OVS rollback | ✅ implemented |
+| Static L3: SVIs on OVS internal ports, `ip routing`, static routes | ✅ implemented |
+| REST API + WebSocket stats, Argon2id auth, RBAC, CSRF, audit log | ✅ implemented |
+| Web panel (React + TS + Vite + Tailwind), xterm web terminal | ✅ implemented |
+| LLDP neighbours | ⚠️ via `lldpd` if installed; otherwise reported as unavailable |
+| OSPF/BGP/FRR | ⚠️ backend stub only — no dynamic routing yet |
+| ACL, QoS, storm control | ❌ not implemented (not advertised in UI either) |
+
+Anything the host or backend cannot do is reported as *unavailable*, never as a
+successful no-op.
+
+## 2. Architecture
+
+```
+            ┌──────────────────────────────┐
+  SSH ────► │ CLI (prompt_toolkit, parser) │──┐
+            └──────────────────────────────┘  │
+            ┌──────────────────────────────┐  │   ┌────────────────────┐
+ Browser ─► │ FastAPI REST + WebSocket     │──┼──►│  core.engine.Engine │
+            │ (auth, RBAC, CSRF, PTY)      │  │   │  validate → diff →  │
+            └──────────────────────────────┘  │   │  reconcile → save   │
+            ┌──────────────────────────────┐  │   └─────────┬──────────┘
+            │ React panel (static assets)  │──┘             │
+            └──────────────────────────────┘                │
+                                     ┌──────────────────────┼──────────────────────┐
+                                     ▼                      ▼                      ▼
+                              backends.ovs (ovs-vsctl)  core.l3 (ip/sysctl)   core.store (SQLite)
+                                     │                      │                      │
+                                 OVSDB + datapath      kernel routing       config/users/audit
+```
+
+Design rules enforced in code:
+
+- **Single write path.** CLI and web never call `ovs-vsctl` themselves; both go
+  through `Engine`, so they always see the same state (`tests/unit/test_api.py`,
+  `tests/unit/test_cli.py`).
+- **Declarative + idempotent.** `Engine.plan()` diffs desired vs. actual;
+  `apply()` is a no-op when nothing changed.
+- **Atomic-ish with rollback.** OVS is snapshotted before an apply; on error the
+  snapshot is restored and the running config is left untouched.
+- **No shell.** External commands are always argv arrays
+  (`subprocess.run([...])`), inputs are validated (`vlan 1-4094`, ifname regex,
+  MTU range, IP/prefix checks).
+- **No surprises at install.** The installer never enslaves a NIC, never
+  touches routes or SSH.
+
+## 3. Requirements
+
+- Debian 12/13 or Ubuntu 22.04/24.04+ (bare metal or VM **with real NICs**)
+- Python 3.11+
+- Open vSwitch 2.17+ (`openvswitch-switch`)
+- `iproute2`, `ethtool`
+- Optional: `lldpd` (topology page), `frr` (future dynamic routing)
+
+The physical switch ports can be onboard NICs, PCIe cards or USB Ethernet
+adapters. USB adapters work but see [Limitations](#10-limitations).
+
+## 4. Installation
+
+```bash
+git clone <your-fork-url>/makemeswitch.git
+cd makemeswitch
+sudo ./install.sh
+```
+
+The clone URL is whatever repository you push this to — the project is
+self-contained: no submodules, no reference to a canonical upstream.
+
+After it finishes:
+
+```
+Switch# show version
+Switch# show interfaces status
+```
+
+```bash
+sudo makemeswitch                 # local console CLI
+ssh admin@<switch-ip>             # switch CLI over SSH (port 22)
+ssh <os-user>@<switch-ip> -p 8022 # host shell (OS accounts)
+http://<switch-ip>:8000/          # web panel, login admin / MakeMeSwitch
+```
+
+> **Port 22 changes hands.** The switch CLI takes 22; the host `sshd` moves to
+> 8022. The installer validates 8022 before touching 22, backs up
+> `/etc/ssh/sshd_config`, and rolls back if anything fails — but open both
+> ports in your firewall *before* you install. Use `--keep-ssh-22` to skip the
+> swap entirely. See section 7a for the recovery procedure.
+
+Options:
+
+```bash
+sudo ./install.sh --help
+  --no-web                 install the CLI/API only, disable the web panel
+  --bind ADDR              API/panel bind address (default 0.0.0.0 = LAN)
+  --port PORT              API/panel port (default 8000)
+  --https                  serve the panel over HTTPS
+  --tls-cert PATH          TLS certificate (PEM)
+  --tls-key PATH           TLS private key (PEM)
+  --admin-user NAME        initial administrator (default admin)
+  --admin-password PASS    initial password (default: MakeMeSwitch)
+  --with-lldp              install lldpd (default: on)
+  --no-attach-all          leave physical NICs unassigned (default: attach all)
+  --keep-ssh-22            do not move host SSH to 8022 (switch CLI off port 22)
+```
+
+The installer:
+
+1. verifies Debian/Ubuntu and the version,
+2. installs `openvswitch-switch`, `frr` (L3), `lldpd` (LLDP), Python venv,
+   `iproute2`, `ethtool` — everything needed is installed automatically,
+3. copies the app to `/opt/makemeswitch/app` and creates `/opt/makemeswitch/venv`,
+4. links the CLI to `/usr/local/bin/makemeswitch` (so `sudo makemeswitch` works),
+5. ships the prebuilt panel in `makemeswitch/web/dist`; if a source tree has no
+   prebuilt assets it installs `nodejs`/`npm` and builds them, and the installer
+   **fails** rather than finishing with a broken UI,
+6. installs `makemeswitch.service` (systemd, `CAP_NET_ADMIN` only, read-only `/usr`),
+7. writes `/etc/makemeswitch/makemeswitch.yaml`, creates `/var/lib/makemeswitch`,
+8. creates the first administrator (default `admin` / `MakeMeSwitch`) and stores it in
+   `/root/makemeswitch-initial-credentials.txt` (mode 600),
+9. attaches **every physical NIC except the management NIC** to the switch
+   (`--no-attach-all` skips this),
+10. stages persistent kernel names `Ethernet1`, `Ethernet2`, … for the next boot,
+11. starts the service, checks that `/` really returns the panel, and prints the
+    LAN URL.
+
+It never enslaves the management NIC (default route / interface holding an IP /
+the NIC your SSH session arrives on), never changes the default route, and never
+touches NetworkManager/systemd-networkd configuration.
+
+The installer prints the LAN URL, e.g. `http://192.168.1.50:8000/`. Open it from
+any device on the management network and sign in with `admin` / `MakeMeSwitch`
+(the default; change it with `sudo makemeswitch user passwd admin` or the Users
+page). The same credentials are written to
+`/root/makemeswitch-initial-credentials.txt`.
+
+To serve TLS on the usual switch port:
+
+```bash
+sudo ./install.sh --https --port 8443 --tls-cert /etc/makemeswitch/tls/cert.pem --tls-key /etc/makemeswitch/tls/key.pem
+```
+
+If you prefer not to expose the panel, bind it to the management address only
+(`--bind 10.0.0.10`) or to `127.0.0.1` and use an SSH tunnel.
+
+## 5. First-time setup
+
+```bash
+sudo makemeswitch
+```
+
+```
+Switch> enable
+Switch# show interfaces status           # every NIC is already a switch port
+Switch# configure terminal
+Switch(config)# hostname LAB-SW01
+LAB-SW01(config)# interface ethernet 1
+LAB-SW01(config-if)# description uplink to lab
+```
+
+Attaching a NIC prints a preview and asks for confirmation, because the NIC
+leaves host networking and becomes a switch port:
+
+```
+! Attaching Ethernet1/1 (enp1s0) will enslave the NIC into OVS bridge mms0.
+! Host networking on enp1s0 stops working until detached.
+Proceed? [confirm]
+```
+
+The host management interface (the one carrying the default route or an IP
+address, and the interface your SSH session arrives on) is **refused**:
+
+```
+% enp0s3 carries host management connectivity - refusing to attach
+```
+
+Then create VLANs and configure ports as in the example at the top, and finish
+with `write memory`.
+
+## 6. Port mapping and identity
+
+`show interfaces mapping` shows the live table:
+
+```
+Switch Port   Linux NIC   Identity             Kind   Driver   Link
+Ethernet1     enp1s0      pci:0000:01:00.0     pci    e1000e   up
+Ethernet2     Ethernet2   usb:1-1.2            usb    ax88179  up
+```
+
+- Ports are named `Ethernet1`, `Ethernet2`, … in CLI/GUI and the kernel.
+  Version 0.1.5 uses an explicit, locked boot/install oneshot, after OVS and
+  network-online and before the API. The installer removes old `.path` and
+  `.link` rules. Watching sysfs with `.path` does not reliably implement hotplug
+  and can retrigger on the application's own renames.
+- Every boot rescans all present NICs, including adapters added after install.
+  No fixed NIC count is assumed (256 and 512 simulated ports are tested).
+  New ports are attached when `attach_new_nics: true`; with `false` they remain
+  unassigned. Immediate hotplug naming is **not** promised; reboot after adding
+  adapters. API reads/discovery never rename or bring links down.
+- Identity uses the last PCI endpoint in sysfs, not a shared upstream bridge.
+  Interrupted `mmstmpN` renames are recovered. Numbering follows physical order;
+  saved and running interface configuration follows the NIC, not the number.
+- Management NICs with addresses/default routes remain excluded. Renaming is
+  the same netdev and retains IPv4; a required down transition can affect IPv6.
+  Missing non-link-local addresses are restored, but SLAAC/link-local convergence
+  is not guaranteed. Every successful rename is journalled and reversed on
+  failure; rollback failures are reported, never hidden.
+
+- `Ethernet1/1` (Cisco slot/port) is still accepted everywhere:
+  `interface ethernet 1/1` == `interface eth 1` == `interface Ethernet1`.
+- `interface` also works from inside an interface (or a range) — `int eth 3`
+  jumps straight to another port, no `exit` needed.
+- Identity is derived from sysfs topology: PCI address for onboard/PCIe cards,
+  USB bus-port path for USB adapters, and stored in SQLite — independent of the
+  kernel name, so a rename never moves a port onto another NIC.
+- The mapping is stored in SQLite. A NIC that disappears stays reserved; if it
+  comes back at the same topology path it gets the same switch port.
+- A *different* device plugged into a previously used USB port does not inherit
+  the old port silently — the engine reports a mismatch instead of stealing the
+  mapping.
+
+## 7. CLI reference
+
+Modes: `User EXEC (>)` → `Privileged EXEC (#)` → `(config)#` →
+`(config-if)#`, `(config-vlan)#`, `(config-svi)#`, `(config-router)#`.
+
+**Typing commands.** Any unambiguous prefix works (`sh int st`, `conf t`,
+`int eth1/1`). `Tab` completes, `?` prints context help immediately (also mid
+line: `show ?`), history is per user, and `do <exec command>` runs EXEC commands
+without leaving configuration mode. Interfaces accept every common spelling:
+`interface Ethernet1/1`, `interface eth1/1`, `interface ethernet 1/1`,
+`interface 1/1`; SVIs as `interface Vlan10` or `interface vlan 10`.
+
+| Command | Mode | Notes |
+|---|---|---|
+| `enable` / `disable` | exec | privilege level |
+| `configure terminal` | priv | global config |
+| `hostname NAME` | config | |
+| `vlan ID` / `name TEXT` / `no vlan ID` | config | 1–4094, deletion blocked while in use |
+| `interface ethernet N/M` | config, config-if | `Ethernet1/1` … (also `int eth 2` from another interface) |
+| `interface range SPEC` | config, config-if | `eth1-4`, `eth1,3,5`, `ethernet 1 - 2` |
+| `switchport attach LINUX_NIC` / `no switchport attach` | config-if | preview + confirmation |
+| `switchport mode access\|trunk` | config-if | |
+| `switchport access vlan ID` | config-if | |
+| `switchport trunk allowed vlan LIST` | config-if | `10,20,30-40` |
+| `switchport trunk native vlan ID` | config-if | |
+| `description TEXT` | config-if | |
+| `shutdown` / `no shutdown` | config-if | real OVS port disable/enable |
+| `mtu N` | config-if | 576–9216 |
+| `channel-group N mode active\|passive\|on` | config-if | LACP/static bond |
+| `interface port-channel N` | config | create/open a port-channel (may be empty) |
+| `monitor session N source\|destination ...` | config | SPAN |
+| `spanning-tree mode rstp\|stp\|none`, `spanning-tree priority N` | config | |
+| `ip routing` / `no ip routing` | config | L3 on/off |
+| `interface vlan ID` + `ip address A.B.C.D/len` | config-svi | SVI on OVS internal port |
+| `ip route PREFIX NEXT_HOP` | config | static route |
+| `show running-config` / `show startup-config` | priv | |
+| `write` / `write memory` | priv, config | both save running → startup |
+| `write erase` | priv | resets startup config (asks confirmation) |
+| `show etherchannel summary` | priv | alias of `show port-channel summary` |
+| `show terminal monitor` | exec, priv | reports that live log streaming is not implemented |
+| `show interfaces description` | exec, priv | port status + description on narrow terminals |
+| `show running-config interface NAME` | priv | one stanza, e.g. `sh run int eth1/1` |
+| `do EXEC-COMMAND` | config* | e.g. `do show vlan brief` |
+| `write memory` / `copy running-config startup-config` | priv | explicit save |
+| `show interfaces [status\|counters\|mapping\|NAME]` | priv | |
+| `show vlan brief` / `show vlan ID` | priv | |
+| `show mac address-table [vlan ID] [interface NAME]` | priv | from OVS FDB |
+| `show ip interface brief` / `show ip route` | priv | |
+| `show spanning-tree`, `show port-channel summary` | priv | |
+| `show lldp neighbors` | priv | errors if `lldpd` missing |
+| `show system resources`, `show version` | priv | |
+| `show logging`, `show configuration drift` | priv | |
+| `rollback [ID]`, `reload` | priv | `reload` asks for confirmation |
+| `?` and `TAB` | any | context help / completion |
+
+Abbreviations work when unambiguous (`sh ver`, `conf t`, `int eth 1/1`), and
+ambiguous ones are rejected exactly like IOS (`% Ambiguous command: "sh i"`).
+
+### Interface ranges
+
+```
+Switch(config)# interface range eth1-4
+Switch(config-if-range)# description access ports
+Switch(config-if-range)# switchport mode access
+Switch(config-if-range)# switchport access vlan 20
+Switch(config-if-range)# exit
+```
+
+Accepted forms: `eth1-4`, `eth1-eth4`, `eth1,3,5`, `ethernet 1 - 2`, `1-4`.
+Commands are applied to every member; a failure on one port is reported with its
+name and does not stop the rest.
+
+### Port-channels
+
+A port-channel can be created **before** it has members, exactly like Cisco:
+
+```
+Switch(config)# interface port-channel 1
+Port-channel 1 created (add members with 'channel-group 1 mode active').
+Switch(config-if)# exit
+Switch(config)# interface ethernet 1
+Switch(config-if)# channel-group 1 mode active
+```
+
+The bond appears in Open vSwitch only once the second member joins; with one
+member no `add-bond` is attempted (OVS rejects one-interface bonds) and that
+port keeps switching on its own. `show port-channel summary` states this
+explicitly. `no interface port-channel N` deletes the channel and returns its
+members to standalone ports.
+
+## 7a. SSH access: switch CLI on 22, host shell on 8022
+
+After installation the two roles are separated:
+
+| Port | What answers | Accounts |
+|------|--------------|----------|
+| **22** | MakeMeSwitch CLI (switch) | appliance users (`username … privilege … secret …`), the same as the panel |
+| **8022** | the host's own `sshd` | OS users (e.g. `debian`) with the keys/passwords they already had |
+
+```
+ssh admin@10.0.0.87          # Switch> ... the switch CLI
+ssh debian@10.0.0.87 -p 8022 # normal Linux shell
+```
+
+What the switch CLI over SSH **cannot** do, by design: run commands (`exec`),
+transfer files (SFTP/SCP), open tunnels (local/remote forwarding), or forward
+agents/X11. A logged-in user only ever talks to the CLI, so there is no path
+from an appliance account to a root shell.
+
+Before port 22 is touched, the installer moves `sshd` to 8022, proves that
+8022 accepts connections, and only then starts the switch SSH service. If any
+step fails it restores the original `/etc/ssh/sshd_config` (backed up in
+`/etc/makemeswitch/backup/sshd_config.orig`) and leaves host SSH on 22. The
+session you are installing from is never disconnected.
+
+Prefer to keep host SSH on 22? Use `--keep-ssh-22`; the switch CLI then lives
+only on the local console and the panel terminal.
+
+**Locked out?** From the physical console:
+
+```bash
+sudo systemctl stop makemeswitch-ssh
+sudo rm -f /etc/ssh/sshd_config.d/99-makemeswitch.conf
+sudo cp /etc/makemeswitch/backup/sshd_config.orig /etc/ssh/sshd_config
+sudo systemctl restart ssh        # host SSH is back on 22
+```
+
+Remember to open both ports in any firewall between you and the switch:
+`tcp/22` (switch CLI) **and** `tcp/8022` (host admin).
+
+## 7b. Monitoring: SNMP and remote syslog
+
+### SNMP (v2c, read-only)
+
+The agent is installed as `makemeswitch-snmpd.service` and answers on `udp/161`.
+Default community: **`public`**, read-only, any source (change it, see below).
+It is an honest L2 device, not a Cisco imitation:
+
+| What | Detail |
+|------|--------|
+| `sysDescr` | `MakeMeSwitch <ver> (Open vSwitch L2 switch on Linux)` |
+| `sysObjectID` | `1.3.6.1.4.1.32473.1.1` by default (the IANA "examples" PEN). Set yours with `snmp-server object-id 1.3.6.1.4.1.<your-PEN>.1` |
+| `sysServices` | `2` — datalink only, which is exactly what this box does |
+| `ifTable` / `ifXTable` | one row per switch port (`Ethernet1…`), 64-bit octet counters, speed, MTU, admin/oper state |
+| `BRIDGE-MIB` | `dot1dBaseBridgeAddress`, `dot1dBaseNumPorts`, `dot1dBasePortIfIndex`, and the learned `dot1dTpFdbTable` from the OVS MAC table |
+
+```bash
+snmpwalk  -v2c -c public 10.0.0.87 1.3.6.1.2.1.1        # identity
+snmpwalk  -v2c -c public 10.0.0.87 1.3.6.1.2.1.2.2.1.2  # port names
+snmpbulkwalk -v2c -c public 10.0.0.87 1.3.6.1.2.1.31.1.1.1.6  # 64-bit counters
+snmpwalk  -v2c -c public 10.0.0.87 1.3.6.1.2.1.17.4.3.1.2      # MAC table
+```
+
+LibreNMS/Infoblox discover it as a normal SNMP device, poll the interfaces and
+draw traffic graphs; the bridge tables are what make it behave like a switch
+rather than a server. Making it appear as a *specific* vendor model is not
+something this project does — there is no Cisco enterprise OID in use anywhere.
+
+Configure:
+
+```
+Switch(config)# snmp-server community public ro 10.0.0.0/21
+Switch(config)# snmp-server contact noc@example.com
+Switch(config)# snmp-server location "rack 3, lab"
+Switch(config)# snmp-server object-id 1.3.6.1.4.1.99999.1
+Switch(config)# no snmp-server enable
+Switch# show snmp
+```
+
+An empty source list means "any address". Every list entry is a CIDR; requests
+from other addresses are dropped without a response (no information leak).
+Only SNMPv2c is implemented — there is no v3/USM, and saying otherwise would be
+a lie.
+
+### Remote syslog
+
+Switch events (config commits, logins, link changes, engine errors) are sent to
+a collector — Infoblox, LibreNMS, rsyslog, a SIEM:
+
+```
+Switch(config)# logging host 10.0.0.10 transport udp port 514 severity info facility local0
+Switch(config)# logging host 10.0.0.10 transport tcp port 6514 severity warning
+Switch# show logging remote
+Switch(config)# no logging host
+```
+
+RFC 5424 by default, RFC 3164 optional. When rsyslog is installed the installer
+also writes `/etc/rsyslog.d/50-makemeswitch.conf`, so the host's own log lines
+are forwarded with the same destination and format. That file is regenerated
+whenever the setting changes and removed by `uninstall.sh`.
+
+## 7c. Banners
+
+```
+Switch(config)# banner login ^C
+  Authorised access only. All activity is logged.
+  ^C
+Switch(config)# banner motd ^C
+  Maintenance window: Sundays 02:00-04:00 UTC
+  ^C
+Switch# show running-config | section banner
+```
+
+The login banner is printed before the prompt, the MOTD after it. Both are
+plain text (no markup interpretation) and can be cleared with
+`no banner login` / `no banner motd`. The panel shows and edits them under
+*Advanced → Monitoring and banner*.
+
+## 7d. User accounts and privileges
+
+The same account database is used by the SSH CLI, the console and the panel.
+
+```
+Switch(config)# username admin privilege 15 secret 0 MyNewPassword
+Switch(config)# username operator privilege 7 secret 0 AnotherPassword
+Switch(config)# username viewer privilege 1 secret 0 ReadOnlyPassword
+Switch# show users
+Switch(config)# no username viewer
+```
+
+| Privilege | Role | Can do |
+|-----------|------|--------|
+| 15 | admin | everything, including users and credentials |
+| 2-14 | operator | configuration changes, no user management |
+| 0-1 | readonly | show commands only |
+
+Cisco type 9 hashes can be imported directly, without ever handling plaintext:
+
+```
+Switch(config)# username admin privilege 15 secret 9 $9$<salt>$<hash>
+```
+
+`$9$…` is a *hash*, not a password. Typing `username admin privilege 15 secret
+9 MakeMeSwitch` is rejected with a message explaining that a type 9 hash was
+expected and that plaintext needs `secret 0 <text>` — the value is never treated
+as a password and never echoed back. `show running-config` prints
+`secret <redacted>`; hashes, plaintext and secrets are also stripped from the
+CLI history file. The last admin account cannot be deleted or demoted, and you
+cannot delete the account you are logged in with.
+
+## 8. Configuration lifecycle
+
+- `running-config` lives in SQLite and is what `show running-config` renders.
+- `startup-config` is written only by `write memory` / `copy run start`.
+- On service start (`Engine.boot`) the **startup config wins**: unsaved running
+  changes are discarded and logged as an event. That is what makes `write
+  memory` meaningful — the behaviour is enforced, not just documented.
+- Every apply is validated first, diffed, then reconciled. On backend failure
+  OVS is restored from a snapshot and the running config is unchanged.
+- `show configuration drift` compares the desired config with live OVS and
+  reports ports that were changed behind MakeMeSwitch's back.
+
+## 9. Web panel
+
+Pages: Dashboard (hostname, versions, uptime, CPU/RAM, OVS status, port counts,
+live traffic chart, recent events), **Ports** (clickable front-panel view with
+per-port editor), Interfaces, VLANs (+ membership matrix), MAC table,
+Topology (LLDP or explicit "neighbour unknown"), Monitoring (RX/TX, packets,
+errors, ranges), Configuration (run/start diff, save, export/import, validate,
+rollback), Terminal (real CLI over a PTY), Advanced (bonding, STP, LLDP, SPAN,
+L3), Logs, Users.
+
+- Dark theme by default, light theme toggle.
+- Real-time port state and counters via `/api/v1/ws/stats`.
+- All mutations go through the same `Engine` as the CLI, so a CLI change shows
+  up in the panel and vice versa.
+- The terminal is the actual `makemeswitch` CLI in a PTY with the logged-in
+  user's role — never a raw root shell.
+
+### REST API
+
+Binds `0.0.0.0:8000` by default so it is reachable from the LAN like any switch
+management UI. Authenticate with `POST /api/v1/auth/login` (cookie + CSRF token).
+For anything beyond a trusted management network, enable HTTPS and restrict the
+port with a firewall. `GET /docs` serves the OpenAPI UI.
+
+```
+GET  /api/v1/system            GET  /api/v1/interfaces      GET  /api/v1/vlans
+GET  /api/v1/mac-table         GET  /api/v1/config          GET  /api/v1/stats
+POST /api/v1/vlans             PATCH/DELETE /api/v1/vlans/{id}
+PATCH /api/v1/interfaces/{name} (name URL-encoded, e.g. Ethernet1%2F1)
+POST /api/v1/interfaces/{name}/attach|detach
+POST /api/v1/config/validate   POST /api/v1/config/apply    POST /api/v1/config/save
+GET  /api/v1/config/drift      POST /api/v1/config/preview  POST /api/v1/config/rollback
+POST /api/v1/auth/login        POST /api/v1/auth/logout      GET /api/v1/auth/session
+WS   /api/v1/ws/stats
+```
+
+## 10. Limitations
+
+- **RSTP convergence.** Ports created while RSTP is already running can stay
+  blocked for the 15 s forwarding delay. MakeMeSwitch works around this by
+  creating ports with RSTP paused and enabling RSTP at the end of the apply;
+  if you change OVS by hand you may still see the delay.
+- **Host firewall.** Inter-VLAN routing traverses the kernel `FORWARD` chain.
+  Docker sets its policy to `DROP`, so MakeMeSwitch installs a small
+  `OSW-FORWARD` chain (jump rule at the top of `FORWARD`) that accepts only
+  traffic to/from its own SVI interfaces. Other firewall rules are untouched.
+- **USB Ethernet.** These adapters often re-enumerate on replug and some report
+  bogus speed/duplex. The stable USB path mapping mitigates renames, but a
+  different adapter in the same port is reported as a mismatch, never silently
+  remapped.
+- **OVS counters** refresh every few seconds, so bandwidth graphs use a 4 s
+  window and can lag slightly.
+- **MAC aging** is OVS's default (300 s); it is not configurable from the CLI
+  yet.
+- **No ACL/QoS/storm-control.** Not exposed anywhere, because OVS needs
+  OpenFlow rules for those and we do not ship half-working buttons.
+- **L3 is IPv4-only** and static-only; FRRouting integration is a stub.
+- **SNMPv2c only.** No v3/USM, no SNMP sets (read-only agent), no traps. LLDP
+  information is available through `lldpcli`, not through LLDP-MIB over SNMP.
+- **SNMP counters come from the kernel** (`/sys/class/net/<if>/statistics`), so
+  they are per-physical-port and 32-bit values wrap in `ifTable`; use
+  `ifXTable`/`ifHCInOctets` for graphs.
+- **The switch SSH service speaks the CLI only.** No `scp`/`sftp`/`rsync` onto
+  the appliance: use the host account on port 8022 for file transfer.
+- **The panel and the CLI assume you own the box.** They run as root (they must,
+  to program OVS); the mitigation is that no shell reaches users through them.
+- Not tested with bonded *management* links or with NetworkManager actively
+  managing candidate ports — detach the NIC from the host manager first.
+
+## 11. Testing
+
+```bash
+# unit tests (no root, fake OVS backend)
+.venv/bin/python -m pytest tests/unit -q
+
+# integration tests (root + OVS + network namespaces)
+sudo .venv/bin/python -m pytest tests/integration -q
+```
+
+Integration tests create disposable `veth` pairs inside network namespaces,
+attach them to a dedicated bridge (`oswtest`) and verify **real forwarding**:
+
+| Test | Verifies |
+|---|---|
+| `test_same_vlan_forwards_and_isolates` | same-VLAN ping works, cross-VLAN ping fails, MAC table populated |
+| `test_administrative_shutdown_blocks_forwarding` | `shutdown` stops forwarding, `no shutdown` restores it |
+| `test_trunk_preserves_vlan_tags` | tagged VLAN 10 crosses a trunk to a `vlan` sub-interface |
+| `test_configuration_survives_restart` | startup config is re-applied after OVS state is wiped |
+| `test_running_config_drift_detected` | manual OVS change shows up as drift |
+| `test_layer3_svi_routes_between_vlans` | SVIs route between VLAN 10 and VLAN 20 in both directions |
+
+Last run on this host (Debian 12, OVS 3.1.0):
+
+```
+tests/unit         48 passed
+tests/integration   6 passed
+```
+
+Unit coverage includes parser modes/abbreviations, model validation, engine
+idempotency/confirmation/rollback, SQLite persistence, CLI↔store sync and the
+REST API (auth, CSRF, RBAC, VLAN/interface operations).
+
+## 12. Troubleshooting
+
+**The port table shows `ovs-system` / `mms0` / `Ethernet4096`.** Those were
+registered as ports by builds before 0.1.3 (the OVS bridge and its internal
+interface both carry a MAC, so they looked like NICs). They are pruned
+automatically the first time the engine syncs after the upgrade — restart the
+service (`sudo systemctl restart makemeswitch`) and reload the panel.
+
+**A new NIC is not listed.** Boot discovery rescans hardware independently of
+old mappings. Reboot after adding NICs, then check
+`sudo systemctl status makemeswitch-nicnames` and `ip -br link`.
+If 0.1.4 collapsed multiple NICs onto one database identity, 0.1.5 recovers each
+physical NIC, but configuration already overwritten by the old collision
+cannot be reconstructed; verify per-port VLANs against your backup.
+
+
+| Symptom | Check |
+|---|---|
+| `% OVS is not available` | `systemctl status openvswitch-switch`, `ovs-vsctl show` |
+| Port stays down | `ip link show <nic>`; USB NIC unplugged? `show interfaces mapping` |
+| No traffic between two access ports | `show vlan brief`, `show mac address-table`, `show configuration drift` |
+| Trunk carries nothing | allowed VLAN list must include the tag; native VLAN must exist |
+| Panel shows `Web panel is not built` | assets missing for the running unit: check `ls /opt/makemeswitch/app/makemeswitch/web/dist` and `systemctl show makemeswitch -p Environment`; re-run `sudo ./install.sh` (it rebuilds and verifies) |
+| `makemeswitch: command not found` | `sudo ln -sf /opt/makemeswitch/venv/bin/makemeswitch /usr/local/bin/makemeswitch` |
+| Panel unreachable remotely | check `ss -ltnp \| grep 8000` — bound to `127.0.0.1`? set `api.bind: 0.0.0.0` in `/etc/makemeswitch/makemeswitch.yaml` and restart; also check the host firewall |
+| Inter-VLAN routing blocked | `iptables -S FORWARD` — look for the `OSW-FORWARD` jump |
+| Login loop | cookies blocked, or service restarted (sessions are DB-backed but expire) |
+| After OVS upgrade | `systemctl restart makemeswitch`, then `show configuration drift` |
+
+Logs: `journalctl -u makemeswitch -f` and `/var/log/makemeswitch/*.log` (JSON lines).
+Audit trail of every change: `show logging` or the Logs page.
+
+## 13. Uninstall
+
+```bash
+sudo ./uninstall.sh            # stop service, keep config and database
+sudo ./uninstall.sh --purge    # also remove /opt/makemeswitch and /etc/makemeswitch
+sudo ./uninstall.sh --purge --purge-data   # also remove /var/lib/makemeswitch
+```
+
+The bridge is only deleted when it has no ports, unless `--force` is given —
+removing a bridge with live ports would disconnect the host. Host networking
+configuration is never modified.
+
+## 14. Roadmap
+
+1. **Now (done):** L2 MVP, CLI, persistence, web panel, static L3, tests.
+2. **Next:** OpenFlow ACLs, QoS/queues, storm control, MAC aging config,
+   per-port `show interfaces counters errors`.
+3. **Then:** FRRouting integration (OSPF/BGP) with real `vtysh` config
+   generation, IPv6 SVIs, VRRP.
+4. **Later:** Ansible collection, Prometheus exporter, config templates,
+   multi-switch stacking over LLDP.
+
+## 15. License
+
+Apache-2.0. Cisco IOS is a trademark of Cisco Systems; this project is
+independent and only borrows a familiar command *style*. No Cisco code or
+documentation is included.
