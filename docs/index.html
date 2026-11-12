@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MakeMeSwitch — One-liner Installer</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #8b949e;
+      --card: #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;
+      --code-bg: #0b0f14;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fa;
+        --fg: #1f2328;
+        --muted: #656d76;
+        --card: #ffffff;
+        --border: #d0d7de;
+        --accent: #0969da;
+        --code-bg: #f0f3f6;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 2rem;
+    }
+    h1 { margin-top: 0; font-size: 1.8rem; }
+    p { color: var(--muted); }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      font-size: 0.92rem;
+    }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .note {
+      border-left: 3px solid var(--accent);
+      padding-left: 0.9rem;
+      margin: 1.25rem 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>MakeMeSwitch</h1>
+    <p>Turn an ordinary Debian or Ubuntu computer into a managed Ethernet switch using Open vSwitch, a Cisco-inspired CLI, and a web dashboard.</p>
+
+    <h2>Quick install</h2>
+    <pre><code>curl -fsSL https://davidmargol.github.io/MakeMeSwitch/install.sh | sudo bash</code></pre>
+
+    <h2>Remote-safe install</h2>
+    <p>Keeps host SSH on port 22 and leaves physical NICs unassigned until you configure them:</p>
+    <pre><code>curl -fsSL https://davidmargol.github.io/MakeMeSwitch/install.sh | sudo bash -s -- --keep-ssh-22 --no-attach-all</code></pre>
+
+    <div class="note">
+      Supported platforms: Debian 12+ and Ubuntu 22.04+. Pass any <code>install.sh</code> flag after <code>--</code>.
+    </div>
+
+    <p>
+      <a href="install.sh">View install.sh</a> ·
+      <a href="https://github.com/davidmargol/MakeMeSwitch">GitHub repository</a>
+    </p>
+  </main>
+</body>
+</html>
