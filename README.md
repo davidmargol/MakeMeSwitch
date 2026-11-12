@@ -223,6 +223,22 @@ These are end-to-end internet speed tests, not controlled physical port-to-port 
 
 USB adapters share host resources and may have lower or less predictable performance than PCIe NICs. This is software switching powered by Open vSwitch rather than a dedicated switch ASIC; on suitable hardware, gigabit-class throughput is achievable, as illustrated by the test results above.
 
+## Quick install (one-liner)
+
+Install the latest release on Debian 12+ or Ubuntu 22.04+ with a single command:
+
+```bash
+curl -fsSL https://davidmargol.github.io/MakeMeSwitch/install.sh | sudo bash
+```
+
+For a cautious **remote** first installation (recommended when connected over SSH), pass installer flags after `--`:
+
+```bash
+curl -fsSL https://davidmargol.github.io/MakeMeSwitch/install.sh | sudo bash -s -- --keep-ssh-22 --no-attach-all
+```
+
+The bootstrap script downloads the latest release archive, extracts it to a temporary directory, and runs `install.sh`. Read the SSH and networking notes below before installing remotely.
+
 ## Installation — GitHub Release archive
 
 **Download the official `makemeswitch-1.0.1.tar.gz` archive** from the [GitHub Releases](../../releases/tag/v1.0.1) page. The release asset contains the application source and installer. You do not need to clone the Git repository.
