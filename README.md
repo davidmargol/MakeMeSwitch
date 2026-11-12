@@ -155,7 +155,7 @@ Mini PC / Raspberry Pi / server
 
 The installer protects the **detected management interface** (the NIC carrying host connectivity) and automatically attaches other eligible physical NICs to Open vSwitch. It does **not** select management purely by numerical port position: on a machine with different NIC enumeration, verify which interface holds the management IP and default route before installation. The remaining ports can be assigned VLANs and switched like ports on a managed Ethernet switch.
 
-For manual port assignment, use `sudo ./install.sh --no-attach-all`.
+For manual port assignment, use `sudo bash ./install.sh --no-attach-all`.
 
 ## Performance benchmarks
 
@@ -192,7 +192,7 @@ iperf3 -c 10.0.0.89 -p 5202 -t 30 -O 3 -R
 iperf3 -c 10.0.0.89 -p 5202 -t 30 -O 3 -P 4
 ```
 
-**Scope:** This is a virtualized, same-host benchmark. It demonstrates the throughput achieved in this specific setup, but does not measure physical Ethernet line rate, cross-host networking, or performance on a Raspberry Pi. The physical 1 GbE port-to-port benchmark is planned separately.
+**Scope:** This is a virtualized, same-host benchmark. It demonstrates the throughput achieved in this specific setup, but does not measure physical Ethernet line rate, cross-host networking, or performance on a Raspberry Pi. A physical 1 GbE port-to-port benchmark has not yet been included.
 
 ### Gigabit internet connectivity
 
@@ -225,18 +225,36 @@ These are end-to-end internet speed tests, not controlled physical port-to-port 
 
 USB adapters share host resources and may have lower or less predictable performance than PCIe NICs. This is software switching powered by Open vSwitch rather than a dedicated switch ASIC; on suitable hardware, gigabit-class throughput is achievable, as illustrated by the test results above.
 
-## Installation
+## Installation — GitHub Release archive
 
-Download the **v1.0.1 source archive** from this repository's **Releases** page, extract it, and run the installer from the project directory:
+**Download the official `makemeswitch-1.0.1.tar.gz` archive** from the [GitHub Releases](../../releases/tag/v1.0.1) page. The release asset contains the application source and installer. You do not need to clone the Git repository.
+
+On your Debian or Ubuntu machine, from the directory containing the downloaded archive:
 
 ```bash
-cd makemeswitch
-sudo ./install.sh
+# Extract the downloaded release archive
+mkdir -p ~/makemeswitch-1.0.1
+tar -xzf makemeswitch-1.0.1.tar.gz -C ~/makemeswitch-1.0.1
+
+# Locate the installer (works whether the archive contains a top-level folder or not)
+find ~/makemeswitch-1.0.1 -name install.sh -type f
+
+# Change into the directory reported above, then run:
+cd ~/makemeswitch-1.0.1  # adjust if install.sh is in a nested directory
+sudo bash ./install.sh
 ```
 
-Alternatively, clone this repository and run the same command from the cloned directory.
+For a cautious **remote** first installation, use `sudo bash ./install.sh --keep-ssh-22 --no-attach-all` instead; read the SSH and networking warnings below before installing.
 
-The installer installs the required Linux packages, creates a Python virtual environment, installs the application and web assets, configures systemd services, and initializes the switch.
+You can also download the asset directly using the URL copied from the release page:
+
+```bash
+curl -fL -o makemeswitch-1.0.1.tar.gz '<PASTE-RELEASE-ASSET-URL-HERE>'
+```
+
+The installer installs the required Linux packages, creates a Python virtual environment, installs the application and web assets, configures systemd services, and initializes the switch. If prebuilt web assets are not present in the archive, it builds the frontend using Node.js/npm.
+
+> **Release packaging:** Before publishing, confirm that the uploaded `.tar.gz` contains `install.sh`, `pyproject.toml`, the `makemeswitch/` package, and the frontend or prebuilt web assets. The archive must be a complete installable release, not just this README.
 
 ### Important: read before installing remotely
 
@@ -252,13 +270,13 @@ The installer installs the required Linux packages, creates a Python virtual env
 **Open port 8022 in your firewall and verify you have console/recovery access before installation.** To keep normal SSH on port 22, use:
 
 ```bash
-sudo ./install.sh --keep-ssh-22
+sudo bash ./install.sh --keep-ssh-22
 ```
 
 **By default, the installer also attaches detected physical NICs other than the management interface to OVS.** To choose ports manually instead, use:
 
 ```bash
-sudo ./install.sh --keep-ssh-22 --no-attach-all
+sudo bash ./install.sh --keep-ssh-22 --no-attach-all
 ```
 
 This is the recommended first installation on a remote machine. Although the installer attempts to protect the management NIC, changing networking remotely always carries a risk of disconnection.
@@ -266,7 +284,7 @@ This is the recommended first installation on a remote machine. Although the ins
 ### Installer options
 
 ```bash
-sudo ./install.sh --help
+sudo bash ./install.sh --help
 ```
 
 Useful options include `--no-web`, `--bind`, `--port`, `--https`, `--tls-cert`, `--tls-key`, `--admin-user`, `--admin-password`, `--no-attach-all` and `--keep-ssh-22`.
@@ -377,7 +395,7 @@ MakeMeSwitch is intended to help you experiment with networking, not to conceal 
 From the project directory:
 
 ```bash
-sudo ./uninstall.sh
+sudo bash ./uninstall.sh
 ```
 
 See `./uninstall.sh --help` before using purge options. Back up your switch configuration and verify network connectivity before removing a switch with active ports.
