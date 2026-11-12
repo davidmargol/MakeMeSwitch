@@ -138,8 +138,6 @@ The CLI includes context-sensitive `?` help, Tab completion, command abbreviatio
 | **Monitoring** | Read-only SNMP v1/v2c, interface counters, bridge/MAC information, remote syslog |
 | **Installation** | Debian/Ubuntu installer, systemd services, optional HTTPS |
 
-**Not implemented:** dynamic routing through FRRouting (OSPF/BGP), SNMPv3, QoS, ACLs and storm control. FRRouting may be installed and detected, but its presence does not mean dynamic routing is available.
-
 ## Port layout: management and switching
 
 A typical MakeMeSwitch device dedicates its **first physical Ethernet connection to management**, while the remaining NICs become switch ports:
@@ -361,7 +359,7 @@ CLI and web changes share the same configuration engine. The web interface is no
 
 MakeMeSwitch includes a REST API with an OpenAPI interface at `http://<switch-ip>:8000/docs` (authentication required for protected operations). It also provides live statistics over WebSockets.
 
-The read-only SNMP agent supports SNMP v1/v2c and common system, interface and bridge information, including learned MAC addresses. Remote syslog is available for forwarding switch events to a collector. **SNMPv3 is not available in v1.0.1.**
+The read-only SNMP agent supports SNMP v1/v2c and common system, interface and bridge information, including learned MAC addresses. Remote syslog is available for forwarding switch events to a collector.
 
 ## Troubleshooting
 
@@ -379,14 +377,12 @@ sudo makemeswitch doctor
 
 For a newly attached NIC, check `show interfaces mapping` and the host's `ip -br link` output. New adapter discovery/naming may require a reboot. If the web panel cannot be reached, verify the bind address, port and firewall rules.
 
-## Limitations and safety
+## Deployment and security notes
 
 - **Software datapath:** measured gigabit-class performance is possible, but throughput and latency depend on CPU, NIC drivers, USB topology and host load. Internet speed tests do not establish maximum port-to-port forwarding capacity.
 - **Remote access changes:** default installation moves host SSH to port 8022 and assigns non-management NICs. Review options before running it on a live server.
 - **Management exposure:** the web panel defaults to HTTP on `0.0.0.0:8000`; SNMP v1/v2c is not encrypted. Restrict access to a trusted management network.
-- **Routing:** IPv4 static routing is supported; dynamic routing protocols are not implemented.
 - **Hardware variability:** USB adapters, hotplug behavior and link reporting differ between devices; adding adapters may require a reboot.
-- **Feature scope:** no SNMPv3, ACL, QoS or storm-control implementation in this release.
 
 MakeMeSwitch is intended to help you experiment with networking, not to conceal the underlying Linux host or guarantee production-grade availability.
 
