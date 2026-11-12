@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+html.dark {
+  --c-bg: 7 11 20;
+  --c-panel: 14 22 38;
+  --c-panel2: 18 29 49;
+  --c-edge: 30 44 68;
+  --c-ink: 230 237 247;
+  --c-muted: 138 160 189;
+  --c-accent: 34 211 238;
+  --c-accent2: 59 130 246;
+  --c-ok: 52 211 153;
+  --c-warn: 251 191 36;
+  --c-bad: 248 113 113;
+  color-scheme: dark;
+}
+
+html.light {
+  --c-bg: 243 246 251;
+  --c-panel: 255 255 255;
+  --c-panel2: 248 250 252;
+  --c-edge: 219 228 240;
+  --c-ink: 15 23 42;
+  --c-muted: 91 107 130;
+  --c-accent: 8 145 178;
+  --c-accent2: 37 99 235;
+  --c-ok: 5 150 105;
+  --c-warn: 217 119 6;
+  --c-bad: 220 38 38;
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-ink font-sans antialiased;
+  background-image: radial-gradient(1200px 600px at 10% -10%, rgb(var(--c-accent2) / 0.10), transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, rgb(var(--c-accent) / 0.08), transparent 55%);
+  background-attachment: fixed;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-edge));
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply bg-panel border border-edge rounded-xl shadow-panel;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-lg border border-edge bg-panel2 px-3 py-2 text-sm font-medium text-ink transition hover:border-accent/60 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply btn border-accent/40 bg-accent/15 text-accent hover:bg-accent/25;
+  }
+  .btn-danger {
+    @apply btn border-bad/40 bg-bad/10 text-bad hover:bg-bad/20;
+  }
+  .input {
+    @apply w-full rounded-lg border border-edge bg-panel2 px-3 py-2 text-sm text-ink outline-none transition placeholder:text-muted/60 focus:border-accent/60 focus:ring-2 focus:ring-accent/20;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-muted;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted;
+  }
+  .td {
+    @apply px-3 py-2 align-middle text-sm;
+  }
+  .nav-item {
+    @apply flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-muted transition hover:bg-panel2 hover:text-ink;
+  }
+  .nav-item-active {
+    @apply bg-accent/10 text-accent;
+  }
+  .mono {
+    @apply font-mono text-[13px];
+  }
+}

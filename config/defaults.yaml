@@ -1,0 +1,35 @@
+# MakeMeSwitch CLI defaults. Also editable at /etc/makemeswitch/makemeswitch.yaml
+bridge: mms0
+db_path: /var/lib/makemeswitch/makemeswitch.db
+state_dir: /var/lib/makemeswitch
+log_dir: /var/log/makemeswitch
+# Ports are only ever enslaved after an explicit confirmation.
+allow_virtual_ports: false
+# A NIC that appears after installation (new adapters in a VM, a USB dongle) is
+# added to the switch automatically. Set to false to require "interface ... /
+# switchport" by hand.
+attach_new_nics: true
+stp_mode: rstp
+stp_priority: 32768
+lldp_enabled: false
+
+api:
+  enabled: true
+  # Reachable from the LAN like any switch/router management UI.
+  # Restrict with a firewall and/or enable HTTPS on untrusted networks.
+  bind: 0.0.0.0
+  port: 8000
+  https: false
+  certfile: /etc/makemeswitch/tls/cert.pem
+  keyfile: /etc/makemeswitch/tls/key.pem
+  session_ttl_seconds: 28800
+  login_rate_limit: 10        # attempts per minute per IP
+  allowed_origins: []         # empty = same-origin only
+
+web:
+  enabled: true
+  title: "MakeMeSwitch Manager"
+
+cli:
+  history_file: /var/lib/makemeswitch/cli_history
+  idle_timeout: 900
